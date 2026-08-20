@@ -1,5 +1,5 @@
 streamlit
 groq
-SpeechRecognition
 edge-tts
 requests
+streamlit-javascript
