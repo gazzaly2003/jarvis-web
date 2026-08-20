@@ -19,7 +19,7 @@ from groq import Groq
 from streamlit_javascript import st_javascript
 
 # ---------- CONFIG ----------
-ASSISTANT_NAME = "MO MO"
+ASSISTANT_NAME = "MOMO"
 CREATOR_NAME = "Gazzaly"
 CREATOR_BIO = (
     f"{CREATOR_NAME} is the developer who built me — someone who wanted a free, "
@@ -40,35 +40,13 @@ if "listening" not in st.session_state:
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-st.markdown("""
-<style>
-div[data-testid="stButton"] button {
-    margin-top: -170px;
-    height: 170px;
-    width: 100%;
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    cursor: pointer;
-}
-div[data-testid="stButton"] button:hover {
-    background: rgba(255,255,255,0.03);
-    border: none;
-}
-div[data-testid="stButton"] button:focus {
-    box-shadow: none;
-    border: none;
-}
-</style>
-""", unsafe_allow_html=True)
-
 
 # ---------------- ANIMATED WAVEFORM ----------------
 
 _WAVE_TEMPLATE = """
-<div style="background:#000000; border-radius:20px; padding:14px 0; display:flex;
-            justify-content:center; align-items:center;">
-  <canvas id="wave" width="680" height="140"></canvas>
+<div style="background:#0c0c0c; border-radius:999px; padding:10px 0; display:flex;
+            justify-content:center; align-items:center; border:1px solid #1f1f1f;">
+  <canvas id="wave" width="380" height="64"></canvas>
 </div>
 <script>
   const canvas = document.getElementById('wave');
@@ -77,14 +55,14 @@ _WAVE_TEMPLATE = """
   const ampScale = __AMP__;
   let t = 0;
   function draw() {
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = '#0c0c0c';
     ctx.fillRect(0, 0, w, h);
     const step = 4;
     for (let x = 0; x < w; x += step) {
       const ratio = x / w;
       const envelope = Math.sin(ratio * Math.PI);
       const wave = Math.sin(ratio * 11 + t * 2.4) * 0.55 + Math.sin(ratio * 19 - t * 3.1) * 0.35;
-      const barH = Math.max(2, Math.abs(envelope * wave) * ampScale * (h / 2 - 6));
+      const barH = Math.max(2, Math.abs(envelope * wave) * ampScale * (h / 2 - 4));
       const hue = (ratio * 280 + t * 25) % 360;
       ctx.strokeStyle = `hsl(${hue}, 85%, 60%)`;
       ctx.lineWidth = step - 1;
@@ -105,7 +83,7 @@ _AMP_BY_STATUS = {"idle": 0.22, "listening": 1.0, "thinking": 0.4, "speaking": 0
 def render_waveform(placeholder, status: str = "idle"):
     html = _WAVE_TEMPLATE.replace("__AMP__", str(_AMP_BY_STATUS.get(status, 0.3)))
     with placeholder.container():
-        components.html(html, height=170)
+        components.html(html, height=90)
 
 
 # ---------------- BROWSER SPEECH RECOGNITION ----------------
@@ -233,27 +211,30 @@ status_placeholder.markdown(
 wave_placeholder = st.empty()
 render_waveform(wave_placeholder, "listening" if st.session_state.listening else "idle")
 
-# Invisible button overlapping the waveform via CSS (see style block above) —
-# this is what actually receives the click.
-if st.button(" ", key="wave_click"):
-    st.session_state.listening = not st.session_state.listening
-    st.rerun()
+btn_col = st.columns([1, 2, 1])[1]
+with btn_col:
+    btn_label = "⏹  Tap to Stop" if st.session_state.listening else "🎙  Tap to Talk"
+    if st.button(btn_label, use_container_width=True,
+                 type="primary" if st.session_state.listening else "secondary"):
+        st.session_state.listening = not st.session_state.listening
+        st.rerun()
 
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
+    avatar = "🧑" if msg["role"] == "user" else "🎙️"
+    with st.chat_message(msg["role"], avatar=avatar):
         st.write(msg["content"])
 
 
 def handle_new_message(text: str):
     st.session_state.messages.append({"role": "user", "content": text})
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar="🧑"):
         st.write(text)
     render_waveform(wave_placeholder, "thinking")
     status_placeholder.markdown(
         "<p style='text-align:center; color:#9a9a9a;'>Thinking...</p>", unsafe_allow_html=True)
     reply = get_reply(text)
     st.session_state.messages.append({"role": "assistant", "content": reply})
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar="🎙️"):
         st.write(reply)
     render_waveform(wave_placeholder, "speaking")
     status_placeholder.markdown(
