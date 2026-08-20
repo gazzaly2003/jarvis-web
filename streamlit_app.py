@@ -1,11 +1,13 @@
 """
 MO MO Web — free, shareable AI voice assistant.
-Two controls: a Chat button (typed messages) and a Siri-style toggle
-button that listens continuously (via the browser's own speech engine)
-until you click it again to stop.
+Click the waveform itself to start listening continuously; click it again
+to stop. Matches the desktop app's clean layout — no extra buttons, no
+visible audio player, just the waveform, status text, replies, and a
+typed-message box.
 """
 
 import asyncio
+import base64
 import datetime
 import time
 
@@ -35,10 +37,30 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "listening" not in st.session_state:
     st.session_state.listening = False
-if "show_chat" not in st.session_state:
-    st.session_state.show_chat = False
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+
+st.markdown("""
+<style>
+div[data-testid="stButton"] button {
+    margin-top: -170px;
+    height: 170px;
+    width: 100%;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    cursor: pointer;
+}
+div[data-testid="stButton"] button:hover {
+    background: rgba(255,255,255,0.03);
+    border: none;
+}
+div[data-testid="stButton"] button:focus {
+    box-shadow: none;
+    border: none;
+}
+</style>
+""", unsafe_allow_html=True)
 
 
 # ---------------- ANIMATED WAVEFORM ----------------
@@ -87,8 +109,6 @@ def render_waveform(placeholder, status: str = "idle"):
 
 
 # ---------------- BROWSER SPEECH RECOGNITION ----------------
-# Runs entirely in the visitor's browser (Chrome/Edge) — free, instant,
-# no audio file upload, no "voice message" step.
 
 _LISTEN_JS = """
 await new Promise((resolve) => {
@@ -175,7 +195,7 @@ def get_reply(command: str) -> str:
         return ask_groq(lower)
 
 
-# ---------------- VOICE OUTPUT ----------------
+# ---------------- VOICE OUTPUT (hidden, autoplay — no visible player) ----------------
 
 async def _synthesize(text: str) -> bytes:
     communicate = edge_tts.Communicate(text, VOICE)
@@ -190,22 +210,34 @@ def speak(text: str) -> bytes:
     return asyncio.run(_synthesize(text))
 
 
+def play_audio_hidden(mp3_bytes: bytes):
+    b64 = base64.b64encode(mp3_bytes).decode()
+    html = f"""
+    <audio autoplay style="display:none">
+        <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+    </audio>
+    """
+    components.html(html, height=0)
+
+
 # ---------------- UI ----------------
 
-st.title(f"🎙️ {ASSISTANT_NAME}")
+st.markdown(f"<h1 style='text-align:center;'>{ASSISTANT_NAME}</h1>", unsafe_allow_html=True)
+
+status_placeholder = st.empty()
+status_placeholder.markdown(
+    "<p style='text-align:center; color:#9a9a9a;'>Tap the wave to talk</p>",
+    unsafe_allow_html=True,
+)
 
 wave_placeholder = st.empty()
 render_waveform(wave_placeholder, "listening" if st.session_state.listening else "idle")
 
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("💬 Chat", use_container_width=True):
-        st.session_state.show_chat = not st.session_state.show_chat
-with col2:
-    talk_label = "⏹ Stop" if st.session_state.listening else "🎙 Talk"
-    if st.button(talk_label, use_container_width=True, type="primary"):
-        st.session_state.listening = not st.session_state.listening
-        st.rerun()
+# Invisible button overlapping the waveform via CSS (see style block above) —
+# this is what actually receives the click.
+if st.button(" ", key="wave_click"):
+    st.session_state.listening = not st.session_state.listening
+    st.rerun()
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -217,34 +249,43 @@ def handle_new_message(text: str):
     with st.chat_message("user"):
         st.write(text)
     render_waveform(wave_placeholder, "thinking")
-    with st.spinner("Thinking..."):
-        reply = get_reply(text)
+    status_placeholder.markdown(
+        "<p style='text-align:center; color:#9a9a9a;'>Thinking...</p>", unsafe_allow_html=True)
+    reply = get_reply(text)
     st.session_state.messages.append({"role": "assistant", "content": reply})
     with st.chat_message("assistant"):
         st.write(reply)
     render_waveform(wave_placeholder, "speaking")
+    status_placeholder.markdown(
+        "<p style='text-align:center; color:#9a9a9a;'>Speaking...</p>", unsafe_allow_html=True)
     try:
         mp3_bytes = speak(reply)
-        st.audio(mp3_bytes, format="audio/mp3", autoplay=True)
-    except Exception as e:
-        st.warning(f"Voice playback failed: {e}")
+        play_audio_hidden(mp3_bytes)
+    except Exception:
+        pass
 
 
 # ---- Continuous voice mode ----
 if st.session_state.listening:
+    status_placeholder.markdown(
+        "<p style='text-align:center; color:#ff8ea0;'>Listening... tap the wave to stop</p>",
+        unsafe_allow_html=True,
+    )
     heard = st_javascript(_LISTEN_JS)
     if heard == "__UNSUPPORTED__":
-        st.error("Your browser doesn't support live speech recognition. "
-                 "Try Chrome or Edge, or use the Chat button instead.")
+        st.error("Your browser doesn't support live speech recognition. Try Chrome or Edge.")
         st.session_state.listening = False
     elif heard:
         handle_new_message(heard)
     if st.session_state.listening:
+        status_placeholder.markdown(
+            "<p style='text-align:center; color:#ff8ea0;'>Listening... tap the wave to stop</p>",
+            unsafe_allow_html=True,
+        )
         time.sleep(0.2)
         st.rerun()
 
-# ---- Typed chat mode ----
-if st.session_state.show_chat:
-    typed = st.chat_input("Type your message")
-    if typed:
-        handle_new_message(typed)
+# ---- Typed chat, always available ----
+typed = st.chat_input("...or type here")
+if typed:
+    handle_new_message(typed)
