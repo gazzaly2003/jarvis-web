@@ -1,19 +1,20 @@
 """
 MO MO Web — free, shareable AI voice assistant.
-Runs on Streamlit Community Cloud. Voice in/out via the browser,
-brain via Groq's free API, natural voice via Microsoft Edge TTS.
+Two controls: a Chat button (typed messages) and a Siri-style toggle
+button that listens continuously (via the browser's own speech engine)
+until you click it again to stop.
 """
 
 import asyncio
 import datetime
-import io
+import time
 
 import edge_tts
 import requests
-import speech_recognition as sr
 import streamlit as st
 import streamlit.components.v1 as components
 from groq import Groq
+from streamlit_javascript import st_javascript
 
 # ---------- CONFIG ----------
 ASSISTANT_NAME = "MO MO"
@@ -23,9 +24,6 @@ CREATOR_BIO = (
     f"friendly AI assistant that anyone could talk to. Edit CREATOR_BIO in the "
     f"code to say whatever you'd actually like me to tell people about you."
 )
-# A few natural female neural voices worth trying if you want a different feel:
-#   en-US-AvaNeural (warm, natural)   en-US-EmmaNeural (bright, friendly)
-#   en-GB-SoniaNeural (British)       en-US-JennyNeural (previous default)
 VOICE = "en-US-AvaNeural"
 DEFAULT_CITY = "Colombo"
 GROQ_MODEL = "openai/gpt-oss-120b"
@@ -35,13 +33,15 @@ st.set_page_config(page_title=ASSISTANT_NAME, page_icon="🎙️", layout="cente
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "last_audio_hash" not in st.session_state:
-    st.session_state.last_audio_hash = None
+if "listening" not in st.session_state:
+    st.session_state.listening = False
+if "show_chat" not in st.session_state:
+    st.session_state.show_chat = False
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 
-# ---------------- ANIMATED WAVEFORM (HTML/JS, runs live in the browser) ----------------
+# ---------------- ANIMATED WAVEFORM ----------------
 
 _WAVE_TEMPLATE = """
 <div style="background:#000000; border-radius:20px; padding:14px 0; display:flex;
@@ -77,7 +77,6 @@ _WAVE_TEMPLATE = """
   draw();
 </script>
 """
-
 _AMP_BY_STATUS = {"idle": 0.22, "listening": 1.0, "thinking": 0.4, "speaking": 0.9}
 
 
@@ -85,6 +84,30 @@ def render_waveform(placeholder, status: str = "idle"):
     html = _WAVE_TEMPLATE.replace("__AMP__", str(_AMP_BY_STATUS.get(status, 0.3)))
     with placeholder.container():
         components.html(html, height=170)
+
+
+# ---------------- BROWSER SPEECH RECOGNITION ----------------
+# Runs entirely in the visitor's browser (Chrome/Edge) — free, instant,
+# no audio file upload, no "voice message" step.
+
+_LISTEN_JS = """
+await new Promise((resolve) => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { resolve("__UNSUPPORTED__"); return; }
+    const recognition = new SR();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    let done = false;
+    recognition.onresult = (event) => {
+        done = true;
+        resolve(event.results[0][0].transcript);
+    };
+    recognition.onerror = () => { if (!done) { done = true; resolve(""); } };
+    recognition.onend = () => { if (!done) { done = true; resolve(""); } };
+    recognition.start();
+});
+"""
 
 
 # ---------------- SKILLS ----------------
@@ -136,8 +159,6 @@ def ask_groq(prompt: str) -> str:
 
 def get_reply(command: str) -> str:
     lower = command.lower().strip()
-    # Be forgiving if the user says "Hey Mo Mo" out of habit — just strip it,
-    # no wake word is actually needed here since recording is manual.
     for prefix in ("hey mo mo", "hey momo", "mo mo", "momo"):
         if lower.startswith(prefix):
             lower = lower[len(prefix):].strip(" ,.")
@@ -154,7 +175,7 @@ def get_reply(command: str) -> str:
         return ask_groq(lower)
 
 
-# ---------------- VOICE ----------------
+# ---------------- VOICE OUTPUT ----------------
 
 async def _synthesize(text: str) -> bytes:
     communicate = edge_tts.Communicate(text, VOICE)
@@ -169,23 +190,22 @@ def speak(text: str) -> bytes:
     return asyncio.run(_synthesize(text))
 
 
-def transcribe(audio_bytes: bytes):
-    r = sr.Recognizer()
-    try:
-        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
-            audio = r.record(source)
-        return r.recognize_google(audio)
-    except (sr.UnknownValueError, sr.RequestError):
-        return None
-
-
 # ---------------- UI ----------------
 
 st.title(f"🎙️ {ASSISTANT_NAME}")
-st.caption("Your free AI voice assistant")
 
 wave_placeholder = st.empty()
-render_waveform(wave_placeholder, "idle")
+render_waveform(wave_placeholder, "listening" if st.session_state.listening else "idle")
+
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("💬 Chat", use_container_width=True):
+        st.session_state.show_chat = not st.session_state.show_chat
+with col2:
+    talk_label = "⏹ Stop" if st.session_state.listening else "🎙 Talk"
+    if st.button(talk_label, use_container_width=True, type="primary"):
+        st.session_state.listening = not st.session_state.listening
+        st.rerun()
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -203,29 +223,28 @@ def handle_new_message(text: str):
     with st.chat_message("assistant"):
         st.write(reply)
     render_waveform(wave_placeholder, "speaking")
-    with st.spinner("Generating voice..."):
-        try:
-            mp3_bytes = speak(reply)
-            st.audio(mp3_bytes, format="audio/mp3", autoplay=True)
-        except Exception as e:
-            st.warning(f"Voice playback failed: {e}")
-    render_waveform(wave_placeholder, "idle")
+    try:
+        mp3_bytes = speak(reply)
+        st.audio(mp3_bytes, format="audio/mp3", autoplay=True)
+    except Exception as e:
+        st.warning(f"Voice playback failed: {e}")
 
 
-audio_value = st.audio_input("Tap to record, tap again to stop")
+# ---- Continuous voice mode ----
+if st.session_state.listening:
+    heard = st_javascript(_LISTEN_JS)
+    if heard == "__UNSUPPORTED__":
+        st.error("Your browser doesn't support live speech recognition. "
+                 "Try Chrome or Edge, or use the Chat button instead.")
+        st.session_state.listening = False
+    elif heard:
+        handle_new_message(heard)
+    if st.session_state.listening:
+        time.sleep(0.2)
+        st.rerun()
 
-if audio_value is not None:
-    audio_bytes = audio_value.getvalue()
-    audio_hash = hash(audio_bytes)
-    if audio_hash != st.session_state.last_audio_hash:
-        st.session_state.last_audio_hash = audio_hash
-        with st.spinner("Transcribing..."):
-            text = transcribe(audio_bytes)
-        if text:
-            handle_new_message(text)
-        else:
-            st.warning("Couldn't quite understand that — try again, a bit closer to the mic.")
-
-typed = st.chat_input("...or type your message")
-if typed:
-    handle_new_message(typed)
+# ---- Typed chat mode ----
+if st.session_state.show_chat:
+    typed = st.chat_input("Type your message")
+    if typed:
+        handle_new_message(typed)
