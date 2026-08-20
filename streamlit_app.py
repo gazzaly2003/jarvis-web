@@ -1,5 +1,5 @@
 """
-JARVIS Web — free, shareable AI voice assistant.
+MO MO Web — free, shareable AI voice assistant.
 Runs on Streamlit Community Cloud. Voice in/out via the browser,
 brain via Groq's free API, natural voice via Microsoft Edge TTS.
 """
@@ -15,13 +15,22 @@ import streamlit as st
 from groq import Groq
 
 # ---------- CONFIG ----------
+ASSISTANT_NAME = "MO MO"
 CREATOR_NAME = "Gazzaly"
-VOICE = "en-US-JennyNeural"
+CREATOR_BIO = (
+    f"{CREATOR_NAME} is the developer who built me — someone who wanted a free, "
+    f"friendly AI assistant that anyone could talk to. Edit CREATOR_BIO in the "
+    f"code to say whatever you'd actually like me to tell people about you."
+)
+# A few natural female neural voices worth trying if you want a different feel:
+#   en-US-AvaNeural (warm, natural)   en-US-EmmaNeural (bright, friendly)
+#   en-GB-SoniaNeural (British)       en-US-JennyNeural (previous default)
+VOICE = "en-US-AvaNeural"
 DEFAULT_CITY = "Colombo"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 # -----------------------------
 
-st.set_page_config(page_title="JARVIS", page_icon="🎙️", layout="centered")
+st.set_page_config(page_title=ASSISTANT_NAME, page_icon="🎙️", layout="centered")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -53,8 +62,10 @@ IDENTITY_PHRASES = [
 ]
 
 SYSTEM_PROMPT = (
-    "You are JARVIS, a witty but helpful AI assistant, speaking to many different "
-    "people through a shared website. Keep answers short and conversational since "
+    f"You are {ASSISTANT_NAME}, a witty but genuinely helpful AI assistant, speaking "
+    "to many different people through a shared website. Be warm and conversational, "
+    "and answer any question you're asked to the best of your ability — general "
+    "knowledge, advice, casual chat, all of it. Keep answers reasonably short since "
     "they are read aloud. Do NOT mention who built you or your creator unless the "
     "user directly asks a question like 'who built/made/created you'. Never bring "
     "it up on your own, in greetings, or in unrelated answers. You cannot open apps "
@@ -79,7 +90,7 @@ def ask_groq(prompt: str) -> str:
 def get_reply(command: str) -> str:
     lower = command.lower()
     if any(p in lower for p in IDENTITY_PHRASES):
-        return f"I was built by {CREATOR_NAME}."
+        return f"I was built by {CREATOR_NAME}. {CREATOR_BIO}"
     elif "weather" in lower:
         return get_weather()
     elif "what time" in lower or lower.strip() == "time":
@@ -115,8 +126,8 @@ def transcribe(audio_bytes: bytes):
 
 # ---------------- UI ----------------
 
-st.title("🎙️ JARVIS")
-st.caption(f"Your free AI voice assistant")
+st.title(f"🎙️ {ASSISTANT_NAME}")
+st.caption("Your free AI voice assistant")
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
