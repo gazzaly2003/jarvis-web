@@ -12,6 +12,7 @@ import edge_tts
 import requests
 import speech_recognition as sr
 import streamlit as st
+import streamlit.components.v1 as components
 from groq import Groq
 
 # ---------- CONFIG ----------
@@ -27,7 +28,7 @@ CREATOR_BIO = (
 #   en-GB-SoniaNeural (British)       en-US-JennyNeural (previous default)
 VOICE = "en-US-AvaNeural"
 DEFAULT_CITY = "Colombo"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "openai/gpt-oss-120b"
 # -----------------------------
 
 st.set_page_config(page_title=ASSISTANT_NAME, page_icon="🎙️", layout="centered")
@@ -38,6 +39,52 @@ if "last_audio_hash" not in st.session_state:
     st.session_state.last_audio_hash = None
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+
+
+# ---------------- ANIMATED WAVEFORM (HTML/JS, runs live in the browser) ----------------
+
+_WAVE_TEMPLATE = """
+<div style="background:#000000; border-radius:20px; padding:14px 0; display:flex;
+            justify-content:center; align-items:center;">
+  <canvas id="wave" width="680" height="140"></canvas>
+</div>
+<script>
+  const canvas = document.getElementById('wave');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height, cy = h / 2;
+  const ampScale = __AMP__;
+  let t = 0;
+  function draw() {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, w, h);
+    const step = 4;
+    for (let x = 0; x < w; x += step) {
+      const ratio = x / w;
+      const envelope = Math.sin(ratio * Math.PI);
+      const wave = Math.sin(ratio * 11 + t * 2.4) * 0.55 + Math.sin(ratio * 19 - t * 3.1) * 0.35;
+      const barH = Math.max(2, Math.abs(envelope * wave) * ampScale * (h / 2 - 6));
+      const hue = (ratio * 280 + t * 25) % 360;
+      ctx.strokeStyle = `hsl(${hue}, 85%, 60%)`;
+      ctx.lineWidth = step - 1;
+      ctx.beginPath();
+      ctx.moveTo(x, cy - barH);
+      ctx.lineTo(x, cy + barH);
+      ctx.stroke();
+    }
+    t += 0.05;
+    requestAnimationFrame(draw);
+  }
+  draw();
+</script>
+"""
+
+_AMP_BY_STATUS = {"idle": 0.22, "listening": 1.0, "thinking": 0.4, "speaking": 0.9}
+
+
+def render_waveform(placeholder, status: str = "idle"):
+    html = _WAVE_TEMPLATE.replace("__AMP__", str(_AMP_BY_STATUS.get(status, 0.3)))
+    with placeholder.container():
+        components.html(html, height=170)
 
 
 # ---------------- SKILLS ----------------
@@ -88,15 +135,23 @@ def ask_groq(prompt: str) -> str:
 
 
 def get_reply(command: str) -> str:
-    lower = command.lower()
+    lower = command.lower().strip()
+    # Be forgiving if the user says "Hey Mo Mo" out of habit — just strip it,
+    # no wake word is actually needed here since recording is manual.
+    for prefix in ("hey mo mo", "hey momo", "mo mo", "momo"):
+        if lower.startswith(prefix):
+            lower = lower[len(prefix):].strip(" ,.")
+            break
+    if not lower:
+        return "I'm listening — go ahead and ask me something!"
     if any(p in lower for p in IDENTITY_PHRASES):
         return f"I was built by {CREATOR_NAME}. {CREATOR_BIO}"
     elif "weather" in lower:
         return get_weather()
-    elif "what time" in lower or lower.strip() == "time":
+    elif "what time" in lower or lower == "time":
         return get_time()
     else:
-        return ask_groq(command)
+        return ask_groq(lower)
 
 
 # ---------------- VOICE ----------------
@@ -129,6 +184,9 @@ def transcribe(audio_bytes: bytes):
 st.title(f"🎙️ {ASSISTANT_NAME}")
 st.caption("Your free AI voice assistant")
 
+wave_placeholder = st.empty()
+render_waveform(wave_placeholder, "idle")
+
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
@@ -138,17 +196,20 @@ def handle_new_message(text: str):
     st.session_state.messages.append({"role": "user", "content": text})
     with st.chat_message("user"):
         st.write(text)
+    render_waveform(wave_placeholder, "thinking")
     with st.spinner("Thinking..."):
         reply = get_reply(text)
     st.session_state.messages.append({"role": "assistant", "content": reply})
     with st.chat_message("assistant"):
         st.write(reply)
+    render_waveform(wave_placeholder, "speaking")
     with st.spinner("Generating voice..."):
         try:
             mp3_bytes = speak(reply)
             st.audio(mp3_bytes, format="audio/mp3", autoplay=True)
         except Exception as e:
             st.warning(f"Voice playback failed: {e}")
+    render_waveform(wave_placeholder, "idle")
 
 
 audio_value = st.audio_input("Tap to record, tap again to stop")
